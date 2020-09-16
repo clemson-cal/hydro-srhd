@@ -1,4 +1,7 @@
-#![allow(unused)]
+use crate::geometry::{Direction, Vector3d};
+
+
+
 
 // ============================================================================
 #[derive(Copy, Clone)]
@@ -6,26 +9,6 @@ pub struct Conserved(pub f64, pub f64, pub f64, pub f64);
 
 #[derive(Copy, Clone)]
 pub struct Primitive(pub f64, pub f64, pub f64, pub f64);
-
-#[derive(Copy, Clone)]
-pub enum Direction { X, Y }
-
-
-
-
-// ============================================================================
-impl Direction
-{
-    fn dot(self, other: Direction) -> f64
-    {
-        match (self, other)
-        {
-            (Direction::X, Direction::X) => 1.0,
-            (Direction::Y, Direction::Y) => 1.0,
-            _ => 0.0,
-        }
-    }
-}
 
 
 
@@ -74,6 +57,18 @@ impl Conserved {
     pub fn momentum_2       (self)  -> f64 { self.2 }
     pub fn energy_density   (self)  -> f64 { self.3 }
 
+    pub fn momentum_vector(self) -> Vector3d {
+        Vector3d(self.momentum_1(), self.momentum_2(), 0.0)
+    }
+
+    pub fn momentum(self, direction: Direction) -> f64 {
+        match direction {
+            Direction::X => self.momentum_1(),
+            Direction::Y => self.momentum_2(),
+            Direction::Z => 0.0,
+        }
+    }
+
     pub fn momentum_squared(self) -> f64 {
         let s1 = self.momentum_1();
         let s2 = self.momentum_2();
@@ -87,7 +82,6 @@ impl Conserved {
         let m               = self.lab_frame_density();
         let tau             = self.energy_density();
         let ss              = self.momentum_squared();
-        let mut found       = false;
         let mut iteration   = 0;
         let mut w0          = 1.0;
         let mut p           = 0.0;
@@ -108,7 +102,6 @@ impl Conserved {
 
             if f64::abs(f) < error_tolerance || (f64::abs(f) < error_tolerance && iteration == newton_iter_max) {
                 w0 = w;
-                found = true;
                 break;
             }
             iteration += 1;
@@ -145,6 +138,7 @@ impl Primitive {
         match direction {
             Direction::X => self.gamma_beta_1(),
             Direction::Y => self.gamma_beta_2(),
+            Direction::Z => 0.0,
         }
     }
 
@@ -152,7 +146,12 @@ impl Primitive {
         match direction {
             Direction::X => self.velocity_1(),
             Direction::Y => self.velocity_2(),
+            Direction::Z => 0.0,
         }
+    }
+
+    pub fn four_velocity_vector(self) -> Vector3d {
+        Vector3d(self.gamma_beta_1(), self.gamma_beta_2(), 0.0) / self.lorentz_factor()
     }
 
     pub fn gamma_beta_squared(self) -> f64 {
@@ -215,8 +214,8 @@ impl Primitive {
 
         let pressure_term = Conserved(
             0.0,
-            pg * direction.dot(Direction::X),
-            pg * direction.dot(Direction::Y),
+            pg * direction.along(Direction::X),
+            pg * direction.along(Direction::Y),
             pg * vn);
 
         let advective_term = self.to_conserved(gamma_law_index) * vn;
@@ -247,6 +246,102 @@ pub fn riemann_hlle(pl: Primitive, pr: Primitive, direction: Direction, gamma_la
 
 
 // ============================================================================
+pub enum RiemannSolverMode
+{
+    HlleFluxAcrossMovingFace(f64),
+    HllcFluxAcrossMovingFace(f64),
+    HllcFluxAcrossContact,
+}
+
+
+
+
+// ============================================================================
+pub fn riemann_hllc(pl: Primitive, pr: Primitive, nhat: Direction, gamma_law_index: f64, mode: RiemannSolverMode) -> (Conserved, f64)
+{
+    let ul = pl.to_conserved(gamma_law_index);
+    let ur = pr.to_conserved(gamma_law_index);
+    let fl = pl.flux_vector(nhat, gamma_law_index);
+    let fr = pr.flux_vector(nhat, gamma_law_index);
+
+    let (alm, alp) = pl.outer_wavespeeds(nhat, gamma_law_index);
+    let (arm, arp) = pr.outer_wavespeeds(nhat, gamma_law_index);
+    let ar = f64::max(alp, arp);
+    let al = f64::min(alm, arm);
+
+    // Equations (9) and (11)
+    let u_hll = (ur * ar - ul * al + (fl - fr))           / (ar - al);
+    let f_hll = (fl * ar - fr * al - (ul - ur) * ar * al) / (ar - al);
+
+    let discriminant = |a: f64, b: f64, c: f64| -> f64
+    {
+        b * b - 4.0 * a * c
+    };
+
+    let quadratic_root = |a: f64, b: f64, c: f64| -> f64
+    {
+        (-b - discriminant(a, b, c).sqrt()) / 2.0 / a
+    };
+
+    // Equation (18) for a-star and p-star
+    let a_star_and_p_star = || -> (f64, f64)
+    {
+        // Mignone defines total energy to include rest mass
+        let ue_hll = u_hll.energy_density() + u_hll.lab_frame_density();
+        let fe_hll = f_hll.energy_density() + f_hll.lab_frame_density();
+        let um_hll = u_hll.momentum(nhat);
+        let fm_hll = f_hll.momentum(nhat);
+        let a_star = quadratic_root(fe_hll, -fm_hll - ue_hll, um_hll);
+        let p_star = -fe_hll * a_star + fm_hll;
+        (a_star, p_star)
+    };
+
+    // Equations (16)
+    let star_state_flux = |u: Conserved, f: Conserved, p: Primitive, a: f64, vface: f64, a_star: f64, p_star: f64| -> Conserved
+    {
+        let e = u.energy_density() + u.lab_frame_density();
+        let s = u.momentum_vector();
+        let m = u.momentum(nhat);
+        let v = p.velocity(nhat);
+        let n = s - nhat * m; // transverse momentum
+        let es = (e * (a - v) + p_star * a_star - p.gas_pressure() * v) / (a - a_star);
+        let ms = (m * (a - v) + p_star          - p.gas_pressure())     / (a - a_star);
+        let ns =  n * (a - v)                                           / (a - a_star);
+        let ds = u.lab_frame_density() * (a - v)                        / (a - a_star);
+        let ss = nhat * ms + ns;
+        let us = Conserved(ds, ss.x(), ss.y(), es - ds);
+        let fs = f + (us - u) * a;
+        fs - us * vface
+    };
+
+    match mode
+    {
+        RiemannSolverMode::HlleFluxAcrossMovingFace(vface) => {
+            if      vface < al { (fl    - ul    * vface, vface) }
+            else if vface > ar { (fr    - ur    * vface, vface) }
+            else               { (f_hll - u_hll * vface, vface) }
+        }
+
+        RiemannSolverMode::HllcFluxAcrossMovingFace(vface) => {
+            let (a_star, p_star) = a_star_and_p_star();
+            if      vface <= al     { (fl - ul * vface, vface) }
+            else if vface >= ar     { (fr - ur * vface, vface) }
+            else if vface <= a_star { (star_state_flux(ul, fl, pl, al, vface, a_star, p_star), vface) }
+            else if vface >= a_star { (star_state_flux(ur, fr, pr, ar, vface, a_star, p_star), vface) }
+            else                    { unreachable!() }
+        }
+
+        RiemannSolverMode::HllcFluxAcrossContact => {
+            let (a_star, p_star) = a_star_and_p_star();
+            (star_state_flux(ul, fl, pl, al, a_star, a_star, p_star), a_star)
+        }
+    }
+}
+
+
+
+
+// ============================================================================
 #[cfg(test)]
 mod tests
 {
@@ -268,5 +363,35 @@ mod tests
         panic_unless_recovery_is_accurate(Primitive(1.0, 0.0, 0.2, 1.0));
         panic_unless_recovery_is_accurate(Primitive(1.0, 0.5, 0.5, 1e-3));
         panic_unless_recovery_is_accurate(Primitive(1.0, 5.0, 5.0, 1e+3));
+    }
+
+    #[test]
+    fn can_obtain_hlle_flux()
+    {
+        let p = Primitive(1.0, 0.0, 0.0, 1.0);
+        let f = riemann_hlle(p, p, Direction::X, 4.0 / 3.0);
+        assert!((f - p.flux_vector(Direction::X, 4.0 / 3.0)).small(1e-12));
+    }
+
+    #[test]
+    fn can_obtain_hllc_flux_x()
+    {
+        let pl = Primitive(1.0, 0.5, 0.0, 1.0);
+        let pr = Primitive(0.1, 0.5, 0.0, 1.0);
+        let (fstar, vface) = riemann_hllc(pl, pr, Direction::X, 4.0 / 3.0, RiemannSolverMode::HllcFluxAcrossContact);
+
+        assert_eq!(fstar.lab_frame_density(), 0.0);
+        assert_eq!(vface, pl.velocity_1());
+    }
+
+    #[test]
+    fn can_obtain_hllc_flux_y()
+    {
+        let pl = Primitive(1.0, 0.0, 0.5, 1.0);
+        let pr = Primitive(0.1, 0.0, 0.5, 1.0);
+        let (fstar, vface) = riemann_hllc(pl, pr, Direction::Y, 4.0 / 3.0, RiemannSolverMode::HllcFluxAcrossContact);
+
+        assert_eq!(fstar.lab_frame_density(), 0.0);
+        assert_eq!(vface, pl.velocity_2());
     }
 }
