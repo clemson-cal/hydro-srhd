@@ -228,6 +228,29 @@ impl Primitive {
 
 
 // ============================================================================
+impl Primitive
+{
+    pub fn spherical_geometry_source_terms(self, spherical_radius: f64, polar_angle_theta: f64, gamma_law_index: f64) -> Conserved
+    {
+        let cotq = f64::tan(std::f64::consts::FRAC_PI_2 - polar_angle_theta);
+        let ur = self.gamma_beta_1();
+        let uq = self.gamma_beta_2();
+        let up = 0.0;
+        let pg = self.gas_pressure();
+        let h0 = self.enthalpy_density(gamma_law_index);
+        let sd = 0.0;
+        let sr = (2.0  * pg + h0 * (uq * uq        + up * up)) / spherical_radius;
+        let sq = (cotq * pg + h0 * (up * up * cotq - ur * uq)) / spherical_radius;
+        // let sp =        -up * h0 * (ur + uq * cotq) / spherical_radius;
+        let se = 0.0;
+        Conserved(sd, sr, sq, se)
+    }
+}
+
+
+
+
+// ============================================================================
 pub fn riemann_hlle(pl: Primitive, pr: Primitive, direction: Direction, gamma_law_index: f64) -> Conserved {
     let ul = pl.to_conserved(gamma_law_index);
     let ur = pr.to_conserved(gamma_law_index);
