@@ -271,7 +271,9 @@ pub fn riemann_hlle(pl: Primitive, pr: Primitive, direction: Direction, gamma_la
 // ============================================================================
 pub enum RiemannSolverMode
 {
+    HlleFlux,
     HlleFluxAcrossMovingFace(f64),
+    HllcFlux,
     HllcFluxAcrossMovingFace(f64),
     HllcFluxAcrossContact,
 }
@@ -339,10 +341,25 @@ pub fn riemann_hllc(pl: Primitive, pr: Primitive, nhat: Direction, gamma_law_ind
 
     match mode
     {
+        RiemannSolverMode::HlleFlux => {
+            if      0.0 < al { (fl   , 0.0) }
+            else if 0.0 > ar { (fr   , 0.0) }
+            else             { (f_hll, 0.0) }
+        }
+
         RiemannSolverMode::HlleFluxAcrossMovingFace(vface) => {
             if      vface < al { (fl    - ul    * vface, vface) }
             else if vface > ar { (fr    - ur    * vface, vface) }
             else               { (f_hll - u_hll * vface, vface) }
+        }
+
+        RiemannSolverMode::HllcFlux => {
+            let (a_star, p_star) = a_star_and_p_star();
+            if      0.0 <= al     { (fl, 0.0) }
+            else if 0.0 >= ar     { (fr, 0.0) }
+            else if 0.0 <= a_star { (star_state_flux(ul, fl, pl, al, 0.0, a_star, p_star), 0.0) }
+            else if 0.0 >= a_star { (star_state_flux(ur, fr, pr, ar, 0.0, a_star, p_star), 0.0) }
+            else                  { unreachable!() }
         }
 
         RiemannSolverMode::HllcFluxAcrossMovingFace(vface) => {
