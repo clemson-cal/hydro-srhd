@@ -44,6 +44,21 @@ impl From<[f64; 4]> for Primitive {
     }
 }
 
+impl Into<[f64; 4]> for Conserved {
+    fn into(self) -> [f64; 4] {
+        [self.0, self.1, self.2, self.3]
+    }    
+}
+
+impl From<[f64; 4]> for Conserved {
+    fn from(a:  [f64; 4]) -> Conserved {
+        Conserved(a[0], a[1], a[2], a[3])
+    }
+}
+
+impl Default for Conserved { fn default() -> Self { Conserved(0.0, 0.0, 0.0, 0.0) } }
+impl Default for Primitive { fn default() -> Self { Primitive(0.0, 0.0, 0.0, 0.0) } }
+
 impl Conserved { pub fn small(self, e: f64) -> bool { self.0.abs() < e && self.1.abs() < e && self.2.abs() < e && self.3.abs() < e } }
 impl Primitive { pub fn small(self, e: f64) -> bool { self.0.abs() < e && self.1.abs() < e && self.2.abs() < e && self.3.abs() < e } }
 
