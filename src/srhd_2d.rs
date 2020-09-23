@@ -320,7 +320,14 @@ pub fn riemann_hllc(pl: Primitive, pr: Primitive, nhat: Direction, gamma_law_ind
 
     let quadratic_root = |a: f64, b: f64, c: f64| -> f64
     {
-        (-b - discriminant(a, b, c).sqrt()) / 2.0 / a
+        let d = discriminant(a, b, c);
+        if d < 0.0 {
+            0.0
+        } else if a.abs() < 1e-8 {
+            -c / b
+        } else {
+            (-b - d.sqrt()) / 2.0 / a
+        }
     };
 
     // Equation (18) for a-star and p-star
