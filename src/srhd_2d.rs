@@ -4,10 +4,10 @@ use crate::geometry::{Direction, Vector3d};
 
 
 // ============================================================================
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Conserved(pub f64, pub f64, pub f64, pub f64);
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Primitive(pub f64, pub f64, pub f64, pub f64);
 
 
@@ -90,7 +90,7 @@ impl Conserved {
         return s1 * s1 + s2 * s2;
     }
 
-    pub fn to_primitive(self, gamma_law_index: f64) -> Primitive {
+    pub fn to_primitive(self, gamma_law_index: f64, use_pressure_floor: bool) -> Primitive {
         let newton_iter_max = 50;
         let error_tolerance = 1e-12;
         let gm              = gamma_law_index;
@@ -120,6 +120,14 @@ impl Conserved {
                 break;
             }
             iteration += 1;
+        }
+
+        if p < 0.0 {
+            if use_pressure_floor {
+                p = -p;
+            } else {
+                panic!("negative pressure p={} on state u={:?}", p, self);
+            }
         }
 
         return Primitive(
@@ -340,6 +348,9 @@ pub fn riemann_hllc(pl: Primitive, pr: Primitive, nhat: Direction, gamma_law_ind
         let fm_hll = f_hll.momentum(nhat);
         let a_star = quadratic_root(fe_hll, -fm_hll - ue_hll, um_hll);
         let p_star = -fe_hll * a_star + fm_hll;
+        if a_star.is_nan() {
+            panic!("a* is NaN {:?} {:?}", pl, pr);
+        }
         (a_star, p_star)
     };
 
@@ -413,7 +424,7 @@ mod tests
     {
         let gamma_law_index = 4.0 / 3.0;
         let u = primitive.to_conserved(gamma_law_index);
-        let p = u.to_primitive(gamma_law_index);
+        let p = u.to_primitive(gamma_law_index, false);
         assert!((primitive - p).small(1e-10));
     }
 
