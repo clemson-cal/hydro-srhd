@@ -90,7 +90,7 @@ impl Conserved {
         return s1 * s1 + s2 * s2;
     }
 
-    pub fn to_primitive(self, gamma_law_index: f64, use_pressure_floor: bool) -> Primitive {
+    pub fn to_primitive(self, gamma_law_index: f64, temperature_floor: Option<f64>) -> Primitive {
         let newton_iter_max = 50;
         let error_tolerance = 1e-12 * self.lab_frame_density();
         let gm              = gamma_law_index;
@@ -123,8 +123,8 @@ impl Conserved {
         }
 
         if p < 0.0 {
-            if use_pressure_floor {
-                p = -p;
+            if let Some(t) = temperature_floor {
+                p = t * self.lab_frame_density();
             } else {
                 panic!("negative pressure p={} on state u={:?}", p, self);
             }
@@ -424,7 +424,7 @@ mod tests
     {
         let gamma_law_index = 4.0 / 3.0;
         let u = primitive.to_conserved(gamma_law_index);
-        let p = u.to_primitive(gamma_law_index, false);
+        let p = u.to_primitive(gamma_law_index, None);
         println!("{:?} {:?}", primitive, p);
         assert!(f64::abs(primitive.gamma_beta_squared() - p.gamma_beta_squared()) < 1e-10);
         assert!(f64::abs(primitive.gas_pressure() - p.gas_pressure()) / primitive.gas_pressure() < 1e-10);
