@@ -92,7 +92,7 @@ impl Conserved {
 
     pub fn to_primitive(self, gamma_law_index: f64, use_pressure_floor: bool) -> Primitive {
         let newton_iter_max = 50;
-        let error_tolerance = 1e-12;
+        let error_tolerance = 1e-12 * self.lab_frame_density();
         let gm              = gamma_law_index;
         let m               = self.lab_frame_density();
         let tau             = self.energy_density();
@@ -115,7 +115,7 @@ impl Conserved {
 
             p -= f / g;
 
-            if f64::abs(f) < error_tolerance || (f64::abs(f) < error_tolerance && iteration == newton_iter_max) {
+            if f64::abs(f) < error_tolerance {
                 w0 = w;
                 break;
             }
@@ -425,7 +425,9 @@ mod tests
         let gamma_law_index = 4.0 / 3.0;
         let u = primitive.to_conserved(gamma_law_index);
         let p = u.to_primitive(gamma_law_index, false);
-        assert!((primitive - p).small(1e-10));
+        println!("{:?} {:?}", primitive, p);
+        assert!(f64::abs(primitive.gamma_beta_squared() - p.gamma_beta_squared()) < 1e-10);
+        assert!(f64::abs(primitive.gas_pressure() - p.gas_pressure()) / primitive.gas_pressure() < 1e-10);
     }
 
     #[test]
@@ -436,6 +438,19 @@ mod tests
         panic_unless_recovery_is_accurate(Primitive(1.0, 0.0, 0.2, 1.0));
         panic_unless_recovery_is_accurate(Primitive(1.0, 0.5, 0.5, 1e-3));
         panic_unless_recovery_is_accurate(Primitive(1.0, 5.0, 5.0, 1e+3));
+    }
+
+    #[test]
+    fn can_recover_primitive_hard()
+    {
+        panic_unless_recovery_is_accurate(Primitive(1e+12, 0.0, 0.0, 1e+12));        
+        panic_unless_recovery_is_accurate(Primitive(1e-12, 0.0, 0.0, 1e-12));
+        panic_unless_recovery_is_accurate(Primitive(1e+12, 0.5, 0.5, 1e+12));
+        panic_unless_recovery_is_accurate(Primitive(1e-12, 0.5, 0.5, 1e-12));
+        panic_unless_recovery_is_accurate(Primitive(1e+16, 0.5, 0.5, 1e+16));
+        panic_unless_recovery_is_accurate(Primitive(1e-16, 0.5, 0.5, 1e-16));
+        panic_unless_recovery_is_accurate(Primitive(1e+26, 0.5, 0.5, 1e+26));
+        panic_unless_recovery_is_accurate(Primitive(1e-26, 0.5, 0.5, 1e-26));
     }
 
     #[test]
