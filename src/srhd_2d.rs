@@ -32,29 +32,11 @@ impl std::ops::Div<f64> for Conserved { type Output = Conserved; fn div(self, a:
 
 
 // ============================================================================
-impl Into<[f64; 4]> for Primitive {
-    fn into(self) -> [f64; 4] {
-        [self.0, self.1, self.2, self.3]
-    }    
-}
+impl Into<[f64; 4]> for Primitive { fn into(self) -> [f64; 4] { [self.0, self.1, self.2, self.3] } }
+impl From<[f64; 4]> for Primitive { fn from(a:  [f64; 4]) -> Primitive { Primitive(a[0], a[1], a[2], a[3]) } }
 
-impl From<[f64; 4]> for Primitive {
-    fn from(a:  [f64; 4]) -> Primitive {
-        Primitive(a[0], a[1], a[2], a[3])
-    }
-}
-
-impl Into<[f64; 4]> for Conserved {
-    fn into(self) -> [f64; 4] {
-        [self.0, self.1, self.2, self.3]
-    }    
-}
-
-impl From<[f64; 4]> for Conserved {
-    fn from(a:  [f64; 4]) -> Conserved {
-        Conserved(a[0], a[1], a[2], a[3])
-    }
-}
+impl Into<[f64; 4]> for Conserved { fn into(self) -> [f64; 4] { [self.0, self.1, self.2, self.3] } }
+impl From<[f64; 4]> for Conserved { fn from(a:  [f64; 4]) -> Conserved { Conserved(a[0], a[1], a[2], a[3]) } }
 
 impl Default for Conserved { fn default() -> Self { Conserved(0.0, 0.0, 0.0, 0.0) } }
 impl Default for Primitive { fn default() -> Self { Primitive(0.0, 0.0, 0.0, 0.0) } }
@@ -62,7 +44,22 @@ impl Default for Primitive { fn default() -> Self { Primitive(0.0, 0.0, 0.0, 0.0
 impl Conserved { pub fn small(self, e: f64) -> bool { self.0.abs() < e && self.1.abs() < e && self.2.abs() < e && self.3.abs() < e } }
 impl Primitive { pub fn small(self, e: f64) -> bool { self.0.abs() < e && self.1.abs() < e && self.2.abs() < e && self.3.abs() < e } }
 
+pub enum RecoveredPrimitive
+{
+    Success(Primitive),
+    NegativePressure(Primitive),
+    RootFinderFailed(Conserved),
+}
 
+impl RecoveredPrimitive {
+    pub fn unwrap(self) -> Primitive {
+        match self {
+            Self::Success(p) => p,
+            Self::NegativePressure(p) => panic!("primitive recovery failed with negative pressure {:?}", p),
+            Self::RootFinderFailed(u) => panic!("primitive recovery failed on conserved state {:?}", u),
+        }
+    }
+}
 
 
 // ============================================================================
@@ -90,18 +87,18 @@ impl Conserved {
         return s1 * s1 + s2 * s2;
     }
 
-    pub fn to_primitive(self, gamma_law_index: f64, temperature_floor: Option<f64>) -> Primitive {
+    pub fn to_primitive(self, gamma_law_index: f64) -> RecoveredPrimitive {
         let newton_iter_max = 50;
         let error_tolerance = 1e-12 * self.lab_frame_density();
         let gm              = gamma_law_index;
         let m               = self.lab_frame_density();
         let tau             = self.energy_density();
         let ss              = self.momentum_squared();
+        let w0;
         let mut iteration   = 0;
-        let mut w0          = 1.0;
         let mut p           = 0.0;
 
-        while iteration <= newton_iter_max {
+        loop {
             let et = tau + p + m;
             let b2 = f64::min(ss / et / et, 1.0 - 1e-10);
             let w2 = 1.0 / (1.0 - b2);
@@ -115,27 +112,27 @@ impl Conserved {
 
             p -= f / g;
 
-            if f64::abs(f) < error_tolerance {
+            if f64::abs(f) < error_tolerance || iteration == newton_iter_max {
                 w0 = w;
                 break;
             }
             iteration += 1;
         }
 
-        if p < 0.0 {
-            if let Some(t) = temperature_floor {
-                p = t * self.lab_frame_density();
-            } else {
-                panic!("negative pressure p={} on state u={:?}", p, self);
-            }
-        }
-
-        return Primitive(
+        let result = Primitive(
             m / w0,
             w0 * self.momentum_1() / (tau + m + p),
             w0 * self.momentum_2() / (tau + m + p),
             p
         );
+
+        if iteration == newton_iter_max {
+            RecoveredPrimitive::RootFinderFailed(self)
+        } else if p < 0.0 {
+            RecoveredPrimitive::NegativePressure(result)
+        } else {
+            RecoveredPrimitive::Success(result)
+        }
     }
 }
 
@@ -424,7 +421,7 @@ mod tests
     {
         let gamma_law_index = 4.0 / 3.0;
         let u = primitive.to_conserved(gamma_law_index);
-        let p = u.to_primitive(gamma_law_index, None);
+        let p = u.to_primitive(gamma_law_index).unwrap();
         println!("{:?} {:?}", primitive, p);
         assert!(f64::abs(primitive.gamma_beta_squared() - p.gamma_beta_squared()) < 1e-10);
         assert!(f64::abs(primitive.gas_pressure() - p.gas_pressure()) / primitive.gas_pressure() < 1e-10);
