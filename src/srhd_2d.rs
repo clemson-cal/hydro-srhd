@@ -301,12 +301,14 @@ pub enum RiemannSolverMode
 
 
 // ============================================================================
-pub fn riemann_hllc(pl: Primitive, pr: Primitive, nhat: Direction, gamma_law_index: f64, mode: RiemannSolverMode) -> (Conserved, f64)
+pub fn riemann_hllc_scalar(pl: Primitive, pr: Primitive, sl: f64, sr: f64, nhat: Direction, gamma_law_index: f64, mode: RiemannSolverMode) -> (Conserved, f64, f64)
 {
     let ul = pl.to_conserved(gamma_law_index);
     let ur = pr.to_conserved(gamma_law_index);
     let fl = pl.flux_vector(nhat, gamma_law_index);
     let fr = pr.flux_vector(nhat, gamma_law_index);
+    let gl = pl.velocity(nhat) * sl;
+    let gr = pr.velocity(nhat) * sr;
 
     let (alm, alp) = pl.outer_wavespeeds(nhat, gamma_law_index);
     let (arm, arp) = pr.outer_wavespeeds(nhat, gamma_law_index);
@@ -316,6 +318,10 @@ pub fn riemann_hllc(pl: Primitive, pr: Primitive, nhat: Direction, gamma_law_ind
     // Equations (9) and (11)
     let u_hll = (ur * ar - ul * al + (fl - fr))           / (ar - al);
     let f_hll = (fl * ar - fr * al - (ul - ur) * ar * al) / (ar - al);
+
+    // For the scalar
+    let s_hll = (sr * ar - sl * al + (gl - gr))           / (ar - al);
+    let g_hll = (gl * ar - gr * al - (sl - sr) * ar * al) / (ar - al);
 
     let discriminant = |a: f64, b: f64, c: f64| -> f64
     {
@@ -351,60 +357,81 @@ pub fn riemann_hllc(pl: Primitive, pr: Primitive, nhat: Direction, gamma_law_ind
     };
 
     // Equations (16)
-    let star_state_flux = |u: Conserved, f: Conserved, p: Primitive, a: f64, vface: f64, a_star: f64, p_star: f64| -> Conserved
+    let star_state_flux = |
+        u: Conserved,
+        f: Conserved,
+        s: f64,
+        g: f64,
+        p: Primitive,
+        a: f64,
+        v_face: f64,
+        a_star: f64,
+        p_star: f64| -> (Conserved, f64, f64)
     {
         let e = u.energy_density() + u.lab_frame_density();
-        let s = u.momentum_vector();
+        let d = u.lab_frame_density();
         let m = u.momentum(nhat);
         let v = p.velocity(nhat);
-        let n = s - nhat * m; // transverse momentum
+        let n = u.momentum_vector() - nhat * m; // transverse momentum
         let es = (e * (a - v) + p_star * a_star - p.gas_pressure() * v) / (a - a_star);
         let ms = (m * (a - v) + p_star          - p.gas_pressure())     / (a - a_star);
-        let ns =  n * (a - v)                                           / (a - a_star);
-        let ds = u.lab_frame_density() * (a - v)                        / (a - a_star);
-        let ss = nhat * ms + ns;
-        let us = Conserved(ds, ss.x(), ss.y(), es - ds);
+        let ns =  n * (a - v) / (a - a_star);
+        let ds =  d * (a - v) / (a - a_star);
+        let ss =  s * (a - v) / (a - a_star);
+        let qs = nhat * ms + ns;
+        let us = Conserved(ds, qs.x(), qs.y(), es - ds);
         let fs = f + (us - u) * a;
-        fs - us * vface
+        let gs = g + (ss - s) * a;
+        (fs - us * v_face, gs - ss * v_face, v_face)
     };
 
     match mode
     {
         RiemannSolverMode::HlleFlux => {
-            if      0.0 < al { (fl   , 0.0) }
-            else if 0.0 > ar { (fr   , 0.0) }
-            else             { (f_hll, 0.0) }
+            if      0.0 < al { (fl   , gl,    0.0) }
+            else if 0.0 > ar { (fr   , gr,    0.0) }
+            else             { (f_hll, g_hll, 0.0) }
         }
 
-        RiemannSolverMode::HlleFluxAcrossMovingFace(vface) => {
-            if      vface < al { (fl    - ul    * vface, vface) }
-            else if vface > ar { (fr    - ur    * vface, vface) }
-            else               { (f_hll - u_hll * vface, vface) }
+        RiemannSolverMode::HlleFluxAcrossMovingFace(v_face) => {
+            if      v_face < al { (fl    - ul    * v_face, gl    - sl    * v_face, v_face) }
+            else if v_face > ar { (fr    - ur    * v_face, gr    - sr    * v_face, v_face) }
+            else                { (f_hll - u_hll * v_face, g_hll - s_hll * v_face, v_face) }
         }
 
         RiemannSolverMode::HllcFlux => {
             let (a_star, p_star) = a_star_and_p_star();
-            if      0.0 <= al     { (fl, 0.0) }
-            else if 0.0 >= ar     { (fr, 0.0) }
-            else if 0.0 <= a_star { (star_state_flux(ul, fl, pl, al, 0.0, a_star, p_star), 0.0) }
-            else if 0.0 >= a_star { (star_state_flux(ur, fr, pr, ar, 0.0, a_star, p_star), 0.0) }
+            if      0.0 <= al     { (fl, gl, 0.0) }
+            else if 0.0 >= ar     { (fr, gr, 0.0) }
+            else if 0.0 <= a_star { star_state_flux(ul, fl, sl, gl, pl, al, 0.0, a_star, p_star) }
+            else if 0.0 >= a_star { star_state_flux(ur, fr, sr, gr, pr, ar, 0.0, a_star, p_star) }
             else                  { unreachable!() }
         }
 
-        RiemannSolverMode::HllcFluxAcrossMovingFace(vface) => {
+        RiemannSolverMode::HllcFluxAcrossMovingFace(v_face) => {
             let (a_star, p_star) = a_star_and_p_star();
-            if      vface <= al     { (fl - ul * vface, vface) }
-            else if vface >= ar     { (fr - ur * vface, vface) }
-            else if vface <= a_star { (star_state_flux(ul, fl, pl, al, vface, a_star, p_star), vface) }
-            else if vface >= a_star { (star_state_flux(ur, fr, pr, ar, vface, a_star, p_star), vface) }
+            if      v_face <= al     { (fl - ul * v_face, gl - sl * v_face, v_face) }
+            else if v_face >= ar     { (fr - ur * v_face, gr - sr * v_face, v_face) }
+            else if v_face <= a_star { star_state_flux(ul, fl, sl, gl, pl, al, v_face, a_star, p_star) }
+            else if v_face >= a_star { star_state_flux(ur, fr, sr, gr, pr, ar, v_face, a_star, p_star) }
             else                    { unreachable!() }
         }
 
         RiemannSolverMode::HllcFluxAcrossContact => {
             let (a_star, p_star) = a_star_and_p_star();
-            (star_state_flux(ul, fl, pl, al, a_star, a_star, p_star), a_star)
+            star_state_flux(ul, fl, sl, gl, pl, al, a_star, a_star, p_star)
         }
     }
+}
+
+
+
+
+// ============================================================================
+pub fn riemann_hllc(pl: Primitive, pr: Primitive, nhat: Direction, gamma_law_index: f64, mode: RiemannSolverMode) -> (Conserved, f64)
+{
+    let (f, _, v) = riemann_hllc_scalar(pl, pr, 0.0, 0.0, nhat, gamma_law_index, mode);
+    (f, v)
 }
 
 
