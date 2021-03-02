@@ -65,6 +65,8 @@ impl RecoveredPrimitive {
 }
 
 
+
+
 // ============================================================================
 impl Conserved {
     pub fn lab_frame_density(self)  -> f64 { self.0 }
@@ -217,6 +219,10 @@ impl Primitive {
 
         return ((vn * (1.0 - a2) - k0) / (1.0 - vv * a2),
                 (vn * (1.0 - a2) + k0) / (1.0 - vv * a2));
+    }
+
+    pub fn max_signal_speed(self, gamma_law_index: f64) -> f64 {
+        f64::sqrt(self.gamma_beta_squared() + self.sound_speed_squared(gamma_law_index))
     }
 
     pub fn to_conserved(self, gamma_law_index: f64) -> Conserved {
