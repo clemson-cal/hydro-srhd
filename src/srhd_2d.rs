@@ -1,5 +1,13 @@
 use std::ops::{Add, Sub, Mul, Div};
+use std::cell::Cell;
 use crate::geometry::{Direction, Vector3d};
+
+
+
+
+thread_local! {
+    static PRESSURE_GUESS: Cell<Option<f64>> = Cell::new(Some(0.0));
+}
 
 
 
@@ -93,6 +101,56 @@ impl Conserved {
     }
 
     pub fn to_primitive(self, gamma_law_index: f64) -> RecoveredPrimitive {
+        use RecoveredPrimitive::*;
+
+        PRESSURE_GUESS.with(|pressure_guess_cell| {
+
+            if let Some(pressure_guess) = pressure_guess_cell.get() {
+
+                // The pressure guess is Some, so we are in normal mode. If
+                // the inversion succeeds, set the guess pressure to the new
+                // result pressure, and return the primitive state. If the
+                // inversion fails, then set the pressure guess to None to
+                // indicate safety mode, and recurse.
+
+                match self.to_primitive_internal(gamma_law_index, pressure_guess) {
+                    Success(prim) => {
+                        pressure_guess_cell.set(Some(prim.gas_pressure()));
+                        Success(prim)
+                    }
+                    _ => {
+                        pressure_guess_cell.set(None);
+                        self.to_primitive(gamma_law_index)
+                    }
+                }
+            } else {
+
+                // The pressure guess is None, so we are in safety mode. If
+                // the inversion succeeds, set the guess pressure to the new
+                // result pressure, and return the primitive state. If the
+                // inversion fails, then restore the state to normal mode and
+                // return the error state.
+
+                match self.to_primitive_internal(gamma_law_index, 0.0) {
+                    Success(prim) => {
+                        pressure_guess_cell.set(Some(prim.gas_pressure()));
+                        Success(prim)
+                    }
+                    NegativePressure(p) => {
+                        pressure_guess_cell.set(Some(0.0));
+                        NegativePressure(p)
+                    }
+                    RootFinderFailed(u) => {
+                        pressure_guess_cell.set(Some(0.0));
+                        RootFinderFailed(u)
+                    }
+                }
+            }
+        })
+    }
+
+    fn to_primitive_internal(self, gamma_law_index: f64, pressure_guess: f64) -> RecoveredPrimitive {
+
         let newton_iter_max = 50;
         let error_tolerance = 1e-12 * self.lab_frame_density();
         let gm              = gamma_law_index;
@@ -101,7 +159,7 @@ impl Conserved {
         let ss              = self.momentum_squared();
         let w0;
         let mut iteration   = 0;
-        let mut p           = 0.0;
+        let mut p           = pressure_guess;
 
         loop {
             let et = tau + p + m;
